@@ -36,6 +36,9 @@ variables:
   # Avoid expensive initialization of dotnet cli, see: https://donovanbrown.com/post/Stop-wasting-time-during-NET-Core-builds
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
   __SuppressAnsiEscapeSequences: 1
+  # Set the following env variables to enabled tracing.
+  COMPlus_PerfMapEnabled: 1
+  COMPlus_EnableEventLog: 1
 
 resources:
 - repo: self
@@ -80,6 +83,24 @@ stages:
       continueOnError: true
 
     - pwsh: |
+        $capRootDir = Join-Path ([System.IO.Path]::GetTempPath()) "CAP"
+        $capUtilDir = Join-Path $capRootDir "Utils"
+
+        if (Test-Path $capRootDir) { Remove-Item $capRootDir -Recurse -Force }
+        New-Item $capUtilDir -ItemType Directory > $null
+
+        $capZipFile = Join-Path $capRootDir "cap.zip"
+        Invoke-WebRequest -Uri https://pscoretestdata.blob.core.windows.net/dotnet-cap/linux.zip -OutFile $capZipFile
+        Expand-Archive -Path $capZipFile -DestinationPath $capUtilDir -Force
+
+        Write-Host "=== Capture CAP Util Directory ==="
+        Get-ChildItem $capUtilDir -Recurse
+
+        Write-Host "##vso[task.setvariable variable=CapUtilDir]$capUtilDir"
+      displayName: 'Download CAP package'
+      condition: succeededOrFailed()
+
+    - pwsh: |
         Import-Module .\tools\ci.psm1
         Invoke-CIInstall -SkipUser
       displayName: Bootstrap
@@ -105,6 +126,15 @@ stages:
         Write-Host "=== Capture Unzipped Directory ==="
         Get-ChildItem $rootPath -Recurse
       displayName: 'Unzip Build and Fix Permissions'
+      condition: succeeded()
+
+    - pwsh: |
+        Import-Module $(CapUtilDir)\CAPService.psm1
+        $date = (Get-Date).ToString("yyyy'-'MM'-'dd")
+        $traceName = "PowerShell_$date"
+        $dataDir = Start-TraceCollection -TraceName $traceName
+        Write-Host "##vso[task.setvariable variable=TraceName]$traceName"
+      displayName: 'Start CLR Trace Collection'
       condition: succeeded()
 
     - pwsh: |
@@ -141,6 +171,17 @@ stages:
         Test-XUnitTestResults -TestResultsFile $xUnitTestResultsFile
       displayName: Verify xUnit Test Results
       condition: succeededOrFailed()
+
+    - pwsh: |
+        $traceName = '$(TraceName)'
+        $capModuleFile = '$(CapUtilDir)\CAPService.psm1'
+
+        if ((Test-Path $capModuleFile) -and ($traceName -like "PowerShell_*")) {
+            Import-Module $capModuleFile
+            Stop-TraceCollection -TraceName $traceName -RepoRoot $pwd
+        }
+      displayName: 'Upload CLR Trace'
+      condition: always()
 
 - stage: CodeCovTestPackage
   displayName: CodeCoverage and Test Packages
