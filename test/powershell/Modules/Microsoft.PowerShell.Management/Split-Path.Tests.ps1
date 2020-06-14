@@ -29,7 +29,11 @@ Describe "Split-Path" -Tags "CI" {
 	{ Split-Path -Qualifier -ErrorAction Stop abcdef } | Should -Throw
     }
 
-    It "Should return the path when the noqualifier switch is used" {
+     It "Should error when using two positional parameters" {
+        { Split-Path env: $NULL } | Should -Throw
+    }
+
+   It "Should return the path when the noqualifier switch is used" {
 	Split-Path env:PATH -NoQualifier | Should -BeExactly "PATH"
     }
 
